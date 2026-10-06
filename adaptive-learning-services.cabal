@@ -1,0 +1,50 @@
+cabal-version:      2.4
+name:               adaptive-learning-services
+version:            0.1.0.0
+synopsis:           A computational framework for adaptive learning services
+description:
+  A prototype expressing adaptive learning services as a small set of generic
+  type classes, with implementations drawn from the research literature.
+  Supplementary material for peer review.
+
+license:            Apache-2.0
+license-file:       LICENSE
+category:           Education
+build-type:         Simple
+extra-doc-files:
+  README.md
+  REFERENCES.md
+  RECOMMEND_SERVICES.md
+  SEARCH_QUERY.md
+
+library
+  hs-source-dirs:   .
+  default-language: Haskell2010
+  build-depends:
+    , base       >=4.14 && <5
+    , containers >=0.6  && <0.8
+
+  exposed-modules:
+    -- Learner model
+    Model
+
+    -- Generic service definitions
+    Assess
+    Feedback
+    Hint
+    Predict
+    Recommend
+    Scaffold
+    Sequence
+    Visualize
+
+    -- Implementations
+    AssessLimEtAl
+    AssessPelanek
+    FeedbackLongAleven
+    HintFactory
+    PredictAkcapinarEtAl
+    RecommendImplementations
+    ScaffoldImplementations
+    SequenceAhmadalievEtAl
+    VisualizeBrusilovsky
