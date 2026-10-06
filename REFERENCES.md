@@ -1,8 +1,6 @@
 # References
 
-Full citations for the papers in **Table: Learner modeling services, data components, and models used**. Every cited paper describes an adaptive system.
-
-
+Full citations for the papers in **Table: Learner modeling services, data components, and models used**. 
 
 ## Contents
 
