@@ -8,11 +8,11 @@
 
 ---
 
-**Jiang et al.** present an online course recommendation method based on an LDA (Latent Dirichlet Allocation) user interest model, evaluated on learner behaviour data from the XuetangX online learning platform. The model infers each learner's preferences over latent interest topics and combines them with each course's importance to recommend courses.
-- **Input:** Learner behaviour data (used to train the LDA user interest model); course descriptions (course name, teacher, and introduction, segmented into keywords); users' evaluations of courses; course schedules; and the learner's available time.
-- **Model:** An LDA user interest model that gives the learner's preference P(M) for each interest topic M and each topic's word distribution, combined with a course importance score Q(s) = λ·Z(s) + (1−λ)·T(s), which weighs course quality Z(s) (the normalised number of user evaluations) against inclusiveness T(s) (how well the course schedule fits the learner's available time).
-- **Candidates:** The learner's candidate set of courses. The paper does not specify how this set is formed; our implementation uses the courses the learner has not yet taken.
-- **Best:** A ranked list of courses ordered by descending interest degree, where for each topic X_M(a,s) = P(M) · sim(γ_M, F_s) · Q(s), and sim is the inverse Jensen–Shannon distance between the topic's word distribution and the course's keyword frequencies. Our implementation sums X_M(a,s) over the learner's topics, as the paper does not give this aggregation.
+**Pelánek et al.** present a modular rule-based framework for recommending learning activities, deployed in the Umíme adaptive practice environment used by tens of thousands of students per day. Observed performance is abstracted into discrete status classes, and IF-THEN rules over these statuses, domain relations, and context generate prioritised recommendations, which are shown to the student as a batch to choose from.
+- **Input:** Students' practice data per learning activity (correctness of answers, response times, number of attempts), together with context such as assigned homework, the current time, and the student's grade.
+- **Model:** A student performance classification that assigns each practised activity a status class (easy mastery, normal mastery, weak mastery, wheelspinning, or tried), combined with domain data such as follow-up relations between topics and the grades for which activities are suitable.
+- **Candidates:** Activities proposed by IF-THEN rules, each with a priority and the name of the rule that produced it. Examples from the paper are a follow-up activity after easy mastery (priority 0.9), the preceding topic after wheelspinning (0.8), repetition of an activity mastered normally at least 10 days ago (0.5), and assigned homework in the afternoon (1). Candidates are then post-filtered, for example to activities suitable for the student's grade.
+- **Best:** A batch of activities selected by a variant of roulette-wheel selection on rule priorities, which favours high-priority rules while keeping the batch diverse; the student chooses which recommended activity to practise. Our implementation uses priority-weighted sampling without replacement and keeps the highest priority when several rules propose the same activity, as the paper does not fix these details.
 
 ---
 
