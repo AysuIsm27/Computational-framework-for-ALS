@@ -8,11 +8,11 @@
 
 ---
 
-**Jagan et al.** propose a learner model for personalised e-content generation, applying Latent Dirichlet Allocation (LDA) to interaction data to identify latent behavioural patterns, which are then integrated into a detailed learner profile for subsequent personalisation.
-- **Input:** Interaction records and activity data capturing initial characteristics and behavioural evidence.
-- **Model:** A Learner Behaviour (LB) model based on LDA that uncovers latent patterns; behavioural topics are combined with a domain ontology to produce processed learner profiles.
-- **Candidates:** Content concepts defined in the domain ontology, each evaluated against the learner's behavioural profile.
-- **Best:** A ranked list of concepts ordered by descending suitability score relative to the learner's inferred behavioural traits; each concept's associated e-content is returned as output.
+**Jiang et al.** present an online course recommendation method based on an LDA (Latent Dirichlet Allocation) user interest model, evaluated on learner behaviour data from the XuetangX online learning platform. The model infers each learner's preferences over latent interest topics and combines them with each course's importance to recommend courses.
+- **Input:** Learner behaviour data (used to train the LDA user interest model); course descriptions (course name, teacher, and introduction, segmented into keywords); users' evaluations of courses; course schedules; and the learner's available time.
+- **Model:** An LDA user interest model that gives the learner's preference P(M) for each interest topic M and each topic's word distribution, combined with a course importance score Q(s) = λ·Z(s) + (1−λ)·T(s), which weighs course quality Z(s) (the normalised number of user evaluations) against inclusiveness T(s) (how well the course schedule fits the learner's available time).
+- **Candidates:** The learner's candidate set of courses. The paper does not specify how this set is formed; our implementation uses the courses the learner has not yet taken.
+- **Best:** A ranked list of courses ordered by descending interest degree, where for each topic X_M(a,s) = P(M) · sim(γ_M, F_s) · Q(s), and sim is the inverse Jensen–Shannon distance between the topic's word distribution and the course's keyword frequencies. Our implementation sums X_M(a,s) over the learner's topics, as the paper does not give this aggregation.
 
 ---
 
