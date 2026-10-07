@@ -134,8 +134,8 @@ cabal build
 
 - **RecommendImplementations.hs**
   Implements four recommendation services in a single file, each grounded in a
-  different computational model: item response theory (Chen et al.), an LDA user
-  interest model (Jiang et al.), formative assessment analytics (Rodriguez-Martinez et al.),
+  different computational model: item response theory (Chen et al.), rule-based
+  recommendation over performance statuses (Pelanek et al.), formative assessment analytics (Rodriguez-Martinez et al.),
   and collaborative filtering (Nguyen et al.). All four share the same generic
   recommendation interface. Demonstrates recommendation services grounded in
   learner and peer-learner models.
