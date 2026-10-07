@@ -3,15 +3,15 @@ module RecommendImplementations where
 
 import Recommend
 import Model
-import Data.List  (sortBy, sortOn, union, (\\))
+import Data.List  (sortBy, sortOn, (\\))
 import Data.Maybe (mapMaybe)
 import Data.Ord   (comparing, Down(..))
 import qualified Data.Map.Strict as Map
 
 
-
+-- | =======================================================================
 -- | 1. Chen et al. — Item Response Theory (IRT)
-
+-- | =======================================================================
 -- | Chen, C. M., Liu, C. Y., & Chang, M. H. (2006).
 -- | Personalized curriculum sequencing utilizing modified item response
 -- | theory for web-based instruction.
@@ -77,163 +77,163 @@ service_irt :: IRTLearner -> IRTModel -> [Item]
 service_irt learner model = recommend learner model
 
 
--- | 2. Jiang et al. -- LDA user interest model
-
--- | Jiang, X., Bai, L., Yan, X., & Wang, Y. (2023).
--- | LDA-based online intelligent courses recommendation system.
--- | Evolutionary Intelligence, 16(5), 1619-1625.
--- | DOI: https://doi.org/10.1007/s12065-022-00810-2
--- | An LDA user interest model, trained on learner behaviour data, gives each
--- | learner a preference P(M) for each of their interest topics M (Sect. 3.2).
--- | For each topic, the learner's interest in a course combines that
--- | preference, the similarity between the topic's word distribution and the
--- | course's keyword frequencies (1 / Jensen-Shannon distance), and the
--- | course's importance Q(s), which weighs course quality (normalised number
--- | of user evaluations) against inclusiveness (fit between the course
--- | schedule and the learner's available time) (Eqs. 1-3). Courses are ranked
--- | by interest degree. The learner may choose which course to take.
+-- | =======================================================================
+-- | 2. Pelanek et al. -- Rule-based recommendations
+-- | =======================================================================
+-- | Pelanek, R., Effenberger, T., & Jarusek, P. (2024).
+-- | Personalized recommendations for learning activities in online
+-- | environments: a modular rule-based approach.
+-- | User Modeling and User-Adapted Interaction, 34(4), 1399-1430.
+-- | DOI: https://doi.org/10.1007/s11257-024-09396-z
+-- | Recommends learning activities in the Umime adaptive practice environment.
+-- | Observed performance (errors, attempts, time to mastery) is abstracted
+-- | into a discrete status per activity (Sect. 4.3, Table 3). IF-THEN rules
+-- | over these statuses, domain relations and context propose activities,
+-- | each with the priority and name of its rule (Sect. 4.5-4.6, Table 4).
+-- | The candidates are post-filtered, e.g. by the student's grade
+-- | (Sect. 4.6), and a batch is presented using a variant of roulette-wheel
+-- | selection on the rule priorities (Sect. 4.7). The learner chooses which
+-- | recommended activity to practise.
 -- |
--- | The paper leaves three details open; the choices made here are:
--- |   * candidate set: courses the learner has not yet taken;
--- |   * X(a,s): the per-topic values X_M(a,s) are summed over the learner's
--- |     C interest topics (the paper announces but does not give this formula);
--- |   * inclusiveness T(s): 1 if the course schedule differs from the
--- |     learner's available time by less than 6.8% (the threshold the paper
--- |     states), and 0 otherwise.
+-- | The paper leaves some details open; the choices made here are:
+-- |   * numeric thresholds for the status classes (Table 3 is qualitative);
+-- |   * "mastered B well" in the Follow-topic rule is read as Easy mastery;
+-- |   * an activity proposed by several rules keeps its highest priority;
+-- |   * the roulette-wheel variant is priority-weighted sampling without
+-- |     replacement, driven by a seed in the input.
 
-type Keyword      = String
-type Distribution = Map.Map Keyword Double
+type ActivityId = String
 
--- | A latent topic M with its word distribution.
-data Topic = Topic { topicId    :: Int
-                   , topicWords :: Distribution
-                   } deriving (Show)
+-- | Status classes of Table 3.
+data Status = EasyMastery    -- ^ low error rate and low time to mastery
+            | NormalMastery  -- ^ other cases of mastery
+            | WeakMastery    -- ^ high error rate or high time to mastery
+            | Wheelspinning  -- ^ many attempts, mastery not reached
+            | Tried          -- ^ mastery not reached, not wheelspinning
+            deriving (Show, Eq, Ord, Enum, Bounded)
 
-data LDAModel = LDAModel
-  { ldaTopics         :: [Topic]                      -- ^ topic-word distributions
-  , userTopicPrefs    :: Map.Map Int [(Int, Double)]  -- ^ learner -> [(topic id, P(M))]
-  , courseEvaluations :: Map.Map String Int           -- ^ course -> number of user evaluations
-  , topWords          :: Int                          -- ^ j: top words per topic forming K
-  , qualityWeight     :: Double                       -- ^ lambda in Eq. (1)
+-- | Evidence: one student's practice of a learning activity.
+data PracticeRecord = PracticeRecord
+  { practiceActivity :: ActivityId
+  , practiceDay      :: Int           -- ^ day of the practice
+  , attempts         :: Int           -- ^ number of answers given
+  , errorRate        :: Double        -- ^ proportion of incorrect answers
+  , timeToMastery    :: Maybe Double  -- ^ seconds; Nothing if not mastered
+  } deriving (Show, Eq)
+
+-- | Thresholds for the status classes.
+data Thresholds = Thresholds
+  { lowErrorRate      :: Double
+  , highErrorRate     :: Double
+  , lowMasteryTime    :: Double
+  , highMasteryTime   :: Double
+  , wheelspinAttempts :: Int
   } deriving (Show)
 
--- | Learner behaviour evidence: a learner's interaction with a course,
--- | which may include evaluating it.
-data InteractionLog = InteractionLog { logStudentId :: Int
-                                     , logCourseId  :: String
-                                     , evaluated    :: Bool
-                                     } deriving (Show, Eq)
+-- | Student performance classification (Sect. 4.3, Table 3).
+classify :: Thresholds -> PracticeRecord -> Status
+classify th r = case timeToMastery r of
+  Just t
+    | errorRate r <= lowErrorRate th && t <= lowMasteryTime th  -> EasyMastery
+    | errorRate r >= highErrorRate th || t >= highMasteryTime th -> WeakMastery
+    | otherwise                                                  -> NormalMastery
+  Nothing
+    | attempts r >= wheelspinAttempts th -> Wheelspinning
+    | otherwise                          -> Tried
 
-data LDALearner = LDALearner { ldaLearnerId       :: Int
-                             , interactionHistory :: [InteractionLog]
-                             , availableTime      :: Double  -- ^ Ydate
-                             } deriving (Show, Eq)
+-- | Learner model: the latest status per activity and the day it was
+-- | observed, together with the domain data the rules use (Sect. 4.4).
+data PerformanceModel = PerformanceModel
+  { thresholds     :: Thresholds
+  , statuses       :: Map.Map ActivityId (Status, Int)
+  , followUps      :: [(ActivityId, ActivityId)]  -- ^ (B, A): A typically follows B
+  , activityGrades :: Map.Map ActivityId [Int]    -- ^ grades an activity suits
+  } deriving (Show)
 
--- | A course, with keyword counts from its name, teacher and introduction
--- | (the keyword set L and frequencies F_s) and its scheduled time Tdate(s).
-data OnlineCourse = OnlineCourse { ocId            :: String
-                                 , ocKeywordCounts :: Map.Map Keyword Int
-                                 , ocScheduledTime :: Double
-                                 } deriving (Show, Eq)
+-- | Input: the student and the context of the recommendation request.
+data RuleContext = RuleContext
+  { ctxStudentId :: Int
+  , ctxDay       :: Int
+  , ctxHour      :: Int           -- ^ current hour of the day (0-23)
+  , ctxHomework  :: [ActivityId]  -- ^ activities assigned as homework
+  , ctxGrade     :: Int
+  , ctxSeed      :: Int           -- ^ seed for roulette-wheel selection
+  } deriving (Show, Eq)
 
-courseCatalogue  :: [OnlineCourse]
-courseCatalogue  =  undefined
+-- | A recommendation candidate: an activity with the priority and the name
+-- | of the rule that generated it (Sect. 4.6). The rule name can be shown
+-- | to the student as the reason for the recommendation (Sect. 4.7).
+data RuleCandidate = RuleCandidate
+  { candActivity :: ActivityId
+  , candPriority :: Double
+  , candRule     :: String
+  } deriving (Show, Eq)
 
--- | Z(s): course quality, i.e. its number of user evaluations normalised
--- | over the candidate set (Sect. 3.1).
-quality :: LDAModel -> [OnlineCourse] -> OnlineCourse -> Double
-quality model cs c
-  | total == 0 = 0
-  | otherwise  = evals c / total
+-- | The rules of Table 4: IF condition THEN recommend activity A.
+rules :: RuleContext -> PerformanceModel -> [RuleCandidate]
+rules ctx model =
+     [ RuleCandidate a 0.9 "Follow topic"       -- s mastered B well, (B, A) in follow
+     | (b, EasyMastery) <- current, (b', a) <- followUps model, b' == b ]
+  ++ [ RuleCandidate a 0.8 "Pred topic"         -- s wheelspinning B, (A, B) in follow
+     | (b, Wheelspinning) <- current, (a, b') <- followUps model, b' == b ]
+  ++ [ RuleCandidate a 0.5 "Repetition normal"  -- s mastered A normally, >= 10 days ago
+     | (a, (NormalMastery, day)) <- Map.toList (statuses model), ctxDay ctx - day >= 10 ]
+  ++ [ RuleCandidate a 1.0 "Homework"           -- s has homework A, current time > 2PM
+     | a <- ctxHomework ctx, ctxHour ctx >= 14 ]
   where
-    evals x = fromIntegral (Map.findWithDefault 0 (ocId x) (courseEvaluations model))
-    total   = sum (map evals cs)
+    current = [ (a, s) | (a, (s, _)) <- Map.toList (statuses model) ]
 
--- | T(s): inclusiveness of the course schedule for the learner (Sect. 3.1).
-inclusiveness :: LDALearner -> OnlineCourse -> Double
-inclusiveness learner c
-  | ydate /= 0 && abs (ocScheduledTime c - ydate) / abs ydate < 0.068 = 1
-  | otherwise                                                       = 0
+-- | Postprocessing (Sect. 4.6): keep activities suitable for the student's
+-- | grade, and one candidate per activity (the highest-priority one).
+postprocess :: RuleContext -> PerformanceModel -> [RuleCandidate] -> [RuleCandidate]
+postprocess ctx model =
+  Map.elems . Map.fromListWith higher . map (\c -> (candActivity c, c)) . filter suitable
   where
-    ydate = availableTime learner
+    suitable c = maybe True (ctxGrade ctx `elem`)
+                       (Map.lookup (candActivity c) (activityGrades model))
+    higher x y = if candPriority x >= candPriority y then x else y
 
--- | Q(s) = lambda * Z(s) + (1 - lambda) * T(s)   (Eq. 1)
-importance :: LDAModel -> LDALearner -> [OnlineCourse] -> OnlineCourse -> Double
-importance model learner cs c =
-  lam * quality model cs c + (1 - lam) * inclusiveness learner c
+-- | Roulette-wheel ordering (Sect. 4.7): candidates are drawn one by one
+-- | with probability proportional to their priority, so high-priority
+-- | recommendations tend to come first while the batch stays diverse.
+rouletteOrder :: Int -> [RuleCandidate] -> [RuleCandidate]
+rouletteOrder _    [] = []
+rouletteOrder seed cs = chosen : rouletteOrder seed' rest
   where
-    lam = qualityWeight model
+    seed'          = (seed * 1103515245 + 12345) `mod` 2147483648
+    point          = fromIntegral seed' / 2147483648 * sum (map candPriority cs)
+    (chosen, rest) = pick point cs
+    pick _ []       = error "rouletteOrder: no candidates"
+    pick _ [c]      = (c, [])
+    pick p (c : more)
+      | p < candPriority c = (c, more)
+      | otherwise          = let (x, ys) = pick (p - candPriority c) more in (x, c : ys)
 
--- | sim(gamma_M, F_s) = 1 / U(gamma_M, F_s), with U the Jensen-Shannon
--- | distance, computed over the combined word set H = L `union` K, where L
--- | holds the course's keywords and K the topic's top-j words (Sect. 3.2, Eq. 2).
-topicCourseSimilarity :: Int -> Topic -> OnlineCourse -> Double
-topicCourseSimilarity j topic c =
-  1 / max 1e-9 (jsDistance gamma freqs)
-  where
-    kSet  = map fst (take j (sortOn (Down . snd) (Map.toList (topicWords topic))))
-    hSet  = Map.keys (ocKeywordCounts c) `union` kSet
-    gamma = normalise [ if h `elem` kSet then Map.findWithDefault 0 h (topicWords topic) else 0
-                      | h <- hSet ]
-    freqs = normalise [ fromIntegral (Map.findWithDefault 0 h (ocKeywordCounts c)) | h <- hSet ]
+-- Model: each practice record updates the student's status for that activity.
+instance Model PerformanceModel PracticeRecord where
+  initModel  =  PerformanceModel (Thresholds 0.1 0.3 300 900 20) Map.empty [] Map.empty
+  update r model =
+    model { statuses = Map.insert (practiceActivity r)
+                                  (classify (thresholds model) r, practiceDay r)
+                                  (statuses model) }
 
-normalise :: [Double] -> [Double]
-normalise xs
-  | total == 0 = xs
-  | otherwise  = map (/ total) xs
-  where
-    total = sum xs
+-- Candidates: activities proposed by the rules, after postprocessing.
+instance Candidates RuleContext PerformanceModel RuleCandidate where
+  candidates ctx model = postprocess ctx model (rules ctx model)
 
--- | Jensen-Shannon distance (square root of the JS divergence, base 2).
-jsDistance :: [Double] -> [Double] -> Double
-jsDistance p q = sqrt (max 0 (0.5 * kl p mid + 0.5 * kl q mid))
-  where
-    mid = zipWith (\a b -> (a + b) / 2) p q
-    kl xs ys = sum [ x * logBase 2 (x / y) | (x, y) <- zip xs ys, x > 0, y > 0 ]
-
--- | X(a, s): learner a's interest degree in course s. Per topic M,
--- | X_M(a, s) = P(M) * sim(gamma_M, F_s) * Q(s)   (Eq. 3),
--- | summed over the learner's interest topics.
-interestDegree :: LDAModel -> LDALearner -> [OnlineCourse] -> OnlineCourse -> Double
-interestDegree model learner cs c =
-  sum [ pM * topicCourseSimilarity (topWords model) t c * q
-      | (tid, pM) <- Map.findWithDefault [] (ldaLearnerId learner) (userTopicPrefs model)
-      , t <- ldaTopics model
-      , topicId t == tid ]
-  where
-    q = importance model learner cs c
-
--- Model: course evaluations in the learner behaviour data are counted for
--- Z(s). (Re-training the LDA topic model itself is not shown here.)
-instance Model LDAModel InteractionLog where
-  initModel  =  LDAModel [] Map.empty Map.empty 10 0.5
-  update l model
-    | evaluated l = model { courseEvaluations =
-                              Map.insertWith (+) (logCourseId l) 1 (courseEvaluations model) }
-    | otherwise   = model
-
--- Candidates: courses the learner has not yet taken.
-instance Candidates LDALearner LDAModel OnlineCourse where
-  candidates learner _ =
-    let taken = map logCourseId (interactionHistory learner)
-    in  filter (\c -> ocId c `notElem` taken) courseCatalogue
-
--- Rank: orders candidates by descending interest degree X(a, s).
-rank_lda :: LDALearner -> LDAModel -> [OnlineCourse] -> [OnlineCourse]
-rank_lda learner model cs =
-  sortOn (Down . interestDegree model learner cs) cs
-
-instance Ranking LDALearner LDAModel OnlineCourse where
-  rank = rank_lda
+-- Rank: roulette-wheel ordering on rule priorities.
+instance Ranking RuleContext PerformanceModel RuleCandidate where
+  rank ctx _ = rouletteOrder (ctxSeed ctx)
 
 
-service_lda :: LDALearner -> LDAModel -> [OnlineCourse]
-service_lda learner model = recommend learner model
+-- | A batch of n recommendations, from which the student chooses one.
+service_rules :: Int -> RuleContext -> PerformanceModel -> [RuleCandidate]
+service_rules n ctx model = recommendTopN n ctx model
 
 
-
+-- | =======================================================================
 -- | 3. Rodriguez-Martinez et al. -- Formative Assessment
--- 
+-- | =======================================================================
 -- | Rodriguez-Martinez, J. A., Gonzalez-Calero, J. A., del Olmo-Munoz, J.,
 -- | Arnau, D., & Tirado-Olivares, S. (2023).
 -- | Building personalised homework from a learning analytics based formative
