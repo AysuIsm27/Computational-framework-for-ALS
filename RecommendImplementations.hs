@@ -77,163 +77,163 @@ service_irt :: IRTLearner -> IRTModel -> [Item]
 service_irt learner model = recommend learner model
 
 
--- | =======================================================================
--- | 2. Pelanek et al. -- Rule-based recommendations
--- | =======================================================================
--- | Pelanek, R., Effenberger, T., & Jarusek, P. (2024).
--- | Personalized recommendations for learning activities in online
--- | environments: a modular rule-based approach.
--- | User Modeling and User-Adapted Interaction, 34(4), 1399-1430.
--- | DOI: https://doi.org/10.1007/s11257-024-09396-z
--- | Recommends learning activities in the Umime adaptive practice environment.
--- | Observed performance (errors, attempts, time to mastery) is abstracted
--- | into a discrete status per activity (Sect. 4.3, Table 3). IF-THEN rules
--- | over these statuses, domain relations and context propose activities,
--- | each with the priority and name of its rule (Sect. 4.5-4.6, Table 4).
--- | The candidates are post-filtered, e.g. by the student's grade
--- | (Sect. 4.6), and a batch is presented using a variant of roulette-wheel
--- | selection on the rule priorities (Sect. 4.7). The learner chooses which
--- | recommended activity to practise.
--- |
--- | The paper leaves some details open; the choices made here are:
--- |   * numeric thresholds for the status classes (Table 3 is qualitative);
--- |   * "mastered B well" in the Follow-topic rule is read as Easy mastery;
--- |   * an activity proposed by several rules keeps its highest priority;
--- |   * the roulette-wheel variant is priority-weighted sampling without
--- |     replacement, driven by a seed in the input.
+
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
+module PelanekImplementation where
+
+import Recommend
+import Model
+import qualified Data.Map.Strict as Map
 
 type ActivityId = String
 
--- | Status classes of Table 3.
-data Status = EasyMastery    -- ^ low error rate and low time to mastery
-            | NormalMastery  -- ^ other cases of mastery
-            | WeakMastery    -- ^ high error rate or high time to mastery
-            | Wheelspinning  -- ^ many attempts, mastery not reached
-            | Tried          -- ^ mastery not reached, not wheelspinning
-            deriving (Show, Eq, Ord, Enum, Bounded)
+-- Sect. 4.3: Discrete Statuses (Table 3)
+-- Abstract performance into discrete classes based on errors, time, and attempts.
 
--- | Evidence: one student's practice of a learning activity.
+
+data Status 
+  = EasyMastery    -- ^ Low error rate, low time to mastery
+  | NormalMastery  -- ^ Standard cases of mastery
+  | WeakMastery    -- ^ High error rate or high time to mastery
+  | Wheelspinning  -- ^ Many attempts, mastery not reached
+  | Tried          -- ^ Attempted, mastery not reached, not wheelspinning
+  deriving (Show, Eq, Ord, Enum, Bounded)
+
 data PracticeRecord = PracticeRecord
   { practiceActivity :: ActivityId
-  , practiceDay      :: Int           -- ^ day of the practice
-  , attempts         :: Int           -- ^ number of answers given
-  , errorRate        :: Double        -- ^ proportion of incorrect answers
-  , timeToMastery    :: Maybe Double  -- ^ seconds; Nothing if not mastered
+  , practiceDay      :: Int           -- ^ Day of practice
+  , attempts         :: Int           -- ^ Number of attempts
+  , errorRate        :: Double        -- ^ Error rate (0.0 - 1.0)
+  , timeToMastery    :: Maybe Double  -- ^ Seconds (Nothing if not mastered)
   } deriving (Show, Eq)
 
--- | Thresholds for the status classes.
+-- Configurable performance classification thresholds (Table 3)
 data Thresholds = Thresholds
   { lowErrorRate      :: Double
   , highErrorRate     :: Double
   , lowMasteryTime    :: Double
   , highMasteryTime   :: Double
   , wheelspinAttempts :: Int
-  } deriving (Show)
+  } deriving (Show, Eq)
 
--- | Student performance classification (Sect. 4.3, Table 3).
 classify :: Thresholds -> PracticeRecord -> Status
 classify th r = case timeToMastery r of
   Just t
-    | errorRate r <= lowErrorRate th && t <= lowMasteryTime th  -> EasyMastery
+    | errorRate r <= lowErrorRate th && t <= lowMasteryTime th   -> EasyMastery
     | errorRate r >= highErrorRate th || t >= highMasteryTime th -> WeakMastery
     | otherwise                                                  -> NormalMastery
   Nothing
     | attempts r >= wheelspinAttempts th -> Wheelspinning
     | otherwise                          -> Tried
 
--- | Learner model: the latest status per activity and the day it was
--- | observed, together with the domain data the rules use (Sect. 4.4).
+-- =========================================================================
+-- Sect. 4.4 & 4.5: Model Parameters & Context
+-- =========================================================================
+
+-- Configurable rule priorities and rule condition thresholds (Table 4)
+data RulePriorities = RulePriorities
+  { priorityHomework   :: Double
+  , priorityFollow     :: Double
+  , priorityPred       :: Double
+  , priorityRepetition :: Double
+  } deriving (Show, Eq)
+
+data RuleParams = RuleParams
+  { rulePriorities    :: RulePriorities
+  , minRepetitionDays :: Int
+  , minHomeworkHour   :: Int
+  } deriving (Show, Eq)
+
 data PerformanceModel = PerformanceModel
   { thresholds     :: Thresholds
-  , statuses       :: Map.Map ActivityId (Status, Int)
-  , followUps      :: [(ActivityId, ActivityId)]  -- ^ (B, A): A typically follows B
-  , activityGrades :: Map.Map ActivityId [Int]    -- ^ grades an activity suits
+  , ruleParams     :: RuleParams
+  , statuses       :: Map.Map ActivityId (Status, Int) -- ^ Activity -> (Status, Day observed)
+  , followUps      :: [(ActivityId, ActivityId)]       -- ^ (B, A): A follows B
+  , activityGrades :: Map.Map ActivityId [Int]         -- ^ Activity -> Suitable grade levels
   } deriving (Show)
 
--- | Input: the student and the context of the recommendation request.
 data RuleContext = RuleContext
   { ctxStudentId :: Int
   , ctxDay       :: Int
-  , ctxHour      :: Int           -- ^ current hour of the day (0-23)
-  , ctxHomework  :: [ActivityId]  -- ^ activities assigned as homework
-  , ctxGrade     :: Int
-  , ctxSeed      :: Int           -- ^ seed for roulette-wheel selection
+  , ctxHour      :: Int           -- ^ Current hour (0-23)
+  , ctxHomework  :: [ActivityId]  -- ^ Assigned homework
+  , ctxGrade     :: Int           -- ^ Student grade
   } deriving (Show, Eq)
 
--- | A recommendation candidate: an activity with the priority and the name
--- | of the rule that generated it (Sect. 4.6). The rule name can be shown
--- | to the student as the reason for the recommendation (Sect. 4.7).
 data RuleCandidate = RuleCandidate
   { candActivity :: ActivityId
-  , candPriority :: Double
-  , candRule     :: String
+  , candPriority :: Double        -- ^ Rule priority weight
+  , candRule     :: String        -- ^ Rule name/explanation
   } deriving (Show, Eq)
 
--- | The rules of Table 4: IF condition THEN recommend activity A.
+
+-- Sect. 4.5: Modular Rules (Table 4)
+-- IF <condition> THEN recommend activity A with rule priority
+
+
 rules :: RuleContext -> PerformanceModel -> [RuleCandidate]
 rules ctx model =
-     [ RuleCandidate a 0.9 "Follow topic"       -- s mastered B well, (B, A) in follow
-     | (b, EasyMastery) <- current, (b', a) <- followUps model, b' == b ]
-  ++ [ RuleCandidate a 0.8 "Pred topic"         -- s wheelspinning B, (A, B) in follow
-     | (b, Wheelspinning) <- current, (a, b') <- followUps model, b' == b ]
-  ++ [ RuleCandidate a 0.5 "Repetition normal"  -- s mastered A normally, >= 10 days ago
-     | (a, (NormalMastery, day)) <- Map.toList (statuses model), ctxDay ctx - day >= 10 ]
-  ++ [ RuleCandidate a 1.0 "Homework"           -- s has homework A, current time > 2PM
-     | a <- ctxHomework ctx, ctxHour ctx >= 14 ]
+     [ RuleCandidate a (priorityFollow prio) "Follow topic"
+     | (b, (EasyMastery, _)) <- Map.toList st, (b', a) <- followUps model, b' == b ]
+  ++ [ RuleCandidate a (priorityPred prio) "Pred topic"
+     | (b, (Wheelspinning, _)) <- Map.toList st, (a, b') <- followUps model, b' == b ]
+  ++ [ RuleCandidate a (priorityRepetition prio) "Repetition normal"
+     | (a, (NormalMastery, day)) <- Map.toList st, ctxDay ctx - day >= minRepetitionDays params ]
+  ++ [ RuleCandidate a (priorityHomework prio) "Homework"
+     | a <- ctxHomework ctx, ctxHour ctx >= minHomeworkHour params ]
   where
-    current = [ (a, s) | (a, (s, _)) <- Map.toList (statuses model) ]
+    st     = statuses model
+    params = ruleParams model
+    prio   = rulePriorities params
 
--- | Postprocessing (Sect. 4.6): keep activities suitable for the student's
--- | grade, and one candidate per activity (the highest-priority one).
+
+-- Sect. 4.6: Postprocessing
+-- Filter by student grade and retain highest-priority candidate per activity.
+
+
 postprocess :: RuleContext -> PerformanceModel -> [RuleCandidate] -> [RuleCandidate]
 postprocess ctx model =
   Map.elems . Map.fromListWith higher . map (\c -> (candActivity c, c)) . filter suitable
   where
-    suitable c = maybe True (ctxGrade ctx `elem`)
-                       (Map.lookup (candActivity c) (activityGrades model))
+    suitable c = maybe True (ctxGrade ctx `elem`) (Map.lookup (candActivity c) (activityGrades model))
     higher x y = if candPriority x >= candPriority y then x else y
 
--- | Roulette-wheel ordering (Sect. 4.7): candidates are drawn one by one
--- | with probability proportional to their priority, so high-priority
--- | recommendations tend to come first while the batch stays diverse.
-rouletteOrder :: Int -> [RuleCandidate] -> [RuleCandidate]
-rouletteOrder _    [] = []
-rouletteOrder seed cs = chosen : rouletteOrder seed' rest
-  where
-    seed'          = (seed * 1103515245 + 12345) `mod` 2147483648
-    point          = fromIntegral seed' / 2147483648 * sum (map candPriority cs)
-    (chosen, rest) = pick point cs
-    pick _ []       = error "rouletteOrder: no candidates"
-    pick _ [c]      = (c, [])
-    pick p (c : more)
-      | p < candPriority c = (c, more)
-      | otherwise          = let (x, ys) = pick (p - candPriority c) more in (x, c : ys)
+-- 
+-- Sect. 4.7: Roulette-Wheel Selection
+-- Priority-weighted sampling without replacement driven by uniform randoms in [0, 1).
 
--- Model: each practice record updates the student's status for that activity.
+
+rouletteOrder :: [Double] -> [RuleCandidate] -> [RuleCandidate]
+rouletteOrder _        [] = []
+rouletteOrder []       cs = cs
+rouletteOrder (u : us) cs = chosen : rouletteOrder us rest
+  where
+    totalWeight    = sum (map candPriority cs)
+    target         = u * totalWeight
+    (chosen, rest) = pick target cs
+
+    pick _ []  = error "rouletteOrder: empty candidate list"
+    pick _ [c] = (c, [])
+    pick p (c : cs')
+      | p < candPriority c = (c, cs')
+      | otherwise          = let (x, ys) = pick (p - candPriority c) cs' in (x, c : ys)
+
+
+-- Framework Instances
+
 instance Model PerformanceModel PracticeRecord where
-  initModel  =  PerformanceModel (Thresholds 0.1 0.3 300 900 20) Map.empty [] Map.empty
+  initModel = PerformanceModel undefined undefined Map.empty [] Map.empty
   update r model =
     model { statuses = Map.insert (practiceActivity r)
                                   (classify (thresholds model) r, practiceDay r)
                                   (statuses model) }
 
--- Candidates: activities proposed by the rules, after postprocessing.
 instance Candidates RuleContext PerformanceModel RuleCandidate where
-  candidates ctx model = postprocess ctx model (rules ctx model)
-
--- Rank: roulette-wheel ordering on rule priorities.
-instance Ranking RuleContext PerformanceModel RuleCandidate where
-  rank ctx _ = rouletteOrder (ctxSeed ctx)
+  candidates ctx model = postprocess ctx model (rules ctx model)               
 
 
--- | A batch of n recommendations, from which the student chooses one.
-service_rules :: Int -> RuleContext -> PerformanceModel -> [RuleCandidate]
-service_rules n ctx model = recommendTopN n ctx model
-
-
--- | =======================================================================
 -- | 3. Rodriguez-Martinez et al. -- Formative Assessment
--- | =======================================================================
+
 -- | Rodriguez-Martinez, J. A., Gonzalez-Calero, J. A., del Olmo-Munoz, J.,
 -- | Arnau, D., & Tirado-Olivares, S. (2023).
 -- | Building personalised homework from a learning analytics based formative
@@ -305,9 +305,8 @@ service_formative learner model = recommend learner model
 
 
 
--- | =======================================================================
 -- | 4. Nguyen et al. -- User-Based Collaborative Filtering
--- | =======================================================================
+
 -- | Nguyen, V. A., Nguyen, H. H., Nguyen, D. L., & Le, M. D. (2021).
 -- | A course recommendation model for students based on learning outcome.
 -- | Education and Information Technologies, 26(5), 5389-5415.
