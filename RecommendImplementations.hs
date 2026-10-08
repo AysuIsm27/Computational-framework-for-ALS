@@ -78,7 +78,7 @@ service_irt learner model = recommend learner model
 
 
 
-{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
+
 module PelanekImplementation where
 
 import Recommend
